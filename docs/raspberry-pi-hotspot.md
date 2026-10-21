@@ -45,12 +45,13 @@ Why this shape:
 |---|---|---|
 | `hostapd` | WiFi access point on `wlan0` | `/etc/hostapd/hostapd.conf`, `/etc/default/hostapd` |
 | `systemd-networkd` | static IP `10.42.0.1/24` on `wlan0` | `/etc/systemd/network/10-wlan0-ap.network` |
-| `dnsmasq` | DHCP + DNS for clients | `/etc/dnsmasq.d/xrouter.conf` |
+| `dnsmasq` | DHCP + DNS for clients | `/etc/dnsmasq.d/xrouter.conf`, `xrouter-static.conf` |
 | `dns-over-socks` | tunnels DNS as DNS-over-TCP through socks5 | `/usr/local/sbin/dns-over-socks.py` + unit |
 | `redsocks` | transparent TCP → socks5 | `/etc/redsocks.conf` + `LimitNOFILE` drop-in |
 | `xrouter-firewall` | iptables redirect + leak prevention | `/usr/local/sbin/xrouter-firewall.sh` + unit |
+| `wg-game` (networkd) | WireGuard game tunnel for the Xbox (section 9) | `/etc/systemd/network/30-wg-game.{netdev,network}` |
 
-All six are enabled at boot. `wpa_supplicant` is **disabled** (it was holding `wlan0`).
+All six services are enabled at boot. `wpa_supplicant` is **disabled** (it was holding `wlan0`).
 
 ---
 
@@ -259,18 +260,27 @@ LimitNOFILE=65536
 ```bash
 #!/bin/bash
 # XRouter: redirect hotspot (wlan0) traffic into the Xray socks5 proxy.
-#   - client TCP -> redsocks (12345) -> socks5 127.0.0.1:10808
-#   - client DNS -> dnsmasq (10.42.0.1:53) -> dns-over-socks -> socks5
-#   - other UDP  -> dropped (no leak; forces TCP fallback, e.g. QUIC->TLS)
+#   - client TCP   -> redsocks (127.0.0.1:12345) -> socks5 127.0.0.1:10808
+#   - client DNS   -> dnsmasq (10.42.0.1:53) -> dns-over-socks -> socks5
+#   - other UDP    -> dropped (no leak; forces TCP fallback, e.g. QUIC->TLS)
+#   - game clients -> all traffic (TCP/UDP/ICMP) via WireGuard wg-game to the
+#                     Iran-Mullvad node (policy routing is set by systemd-networkd);
+#                     their DNS still goes to dnsmasq
 # Idempotent: safe to re-run.
 set -uo pipefail
 WIFI=wlan0
 RP=12345
+GAME_IF=wg-game
+GAME_CLIENTS="10.42.0.124"   # Xbox (static lease in /etc/dnsmasq.d/xrouter-static.conf)
 
+# Safety net: make sure the AP gateway IP is present (boot race with networkd)
 ip addr show "$WIFI" 2>/dev/null | grep -q "10.42.0.1/24" \
   || ip addr replace 10.42.0.1/24 dev "$WIFI" 2>/dev/null || true
+
+# Enable IPv4 forwarding
 sysctl -qw net.ipv4.ip_forward=1
 
+# ---- NAT: XROUTER chain (skip local/reserved nets, redirect rest of TCP) ----
 iptables -t nat -N XROUTER 2>/dev/null || true
 iptables -t nat -F XROUTER
 for net in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 \
@@ -278,34 +288,67 @@ for net in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 \
   iptables -t nat -A XROUTER -d "$net" -j RETURN
 done
 iptables -t nat -A XROUTER -p tcp -j REDIRECT --to-ports "$RP"
+# Game clients' TCP is not redirected into redsocks; it is routed via wg-game.
+for ip in $GAME_CLIENTS; do
+  iptables -t nat -I XROUTER 1 -s "$ip" -j RETURN
+done
 
+# ---- PREROUTING hooks for wlan0 (idempotent) ----
+# DNS (force every client DNS query through our resolver -> tunnel)
 iptables -t nat -C PREROUTING -i "$WIFI" -p udp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null \
   || iptables -t nat -A PREROUTING -i "$WIFI" -p udp --dport 53 -j REDIRECT --to-ports 53
 iptables -t nat -C PREROUTING -i "$WIFI" -p tcp --dport 53 -j REDIRECT --to-ports 53 2>/dev/null \
   || iptables -t nat -A PREROUTING -i "$WIFI" -p tcp --dport 53 -j REDIRECT --to-ports 53
+# All other TCP -> redsocks chain
 iptables -t nat -C PREROUTING -i "$WIFI" -p tcp -j XROUTER 2>/dev/null \
   || iptables -t nat -A PREROUTING -i "$WIFI" -p tcp -j XROUTER
 
-# FORWARD: allow clients to reach the Docker-published web panel, drop the rest.
-# Published ports (e.g. panel :8080) are DNAT'd to the container, so they traverse
-# FORWARD (in=wlan0, out=docker bridge) instead of INPUT. Allow that flow + its
-# established return, then drop all other wlan0 forwarding (no direct/UDP leak).
+# ---- FORWARD: allow clients to reach the Docker-published web panel, drop rest ----
+# Published ports (e.g. web panel :8080) are DNAT'd to the container, so they
+# traverse FORWARD (in=wlan0, out=docker bridge) instead of INPUT. We must allow
+# that flow + its established return, then drop all other wlan0 forwarding so
+# there is no direct/UDP egress leak. Rebuilt deterministically each run; we only
+# touch our own rules, never Docker's.
 PANEL_PORT=8080
 DOCKER_SUBNETS="$(ip -o -4 addr show | awk '$2 ~ /^(docker0|br-)/ {print $4}')"
+
+# Remove our previous rules (idempotent rebuild)
 iptables -D FORWARD -o "$WIFI" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
 for sub in $DOCKER_SUBNETS; do
   iptables -D FORWARD -i "$WIFI" -p tcp -d "$sub" --dport "$PANEL_PORT" -j ACCEPT 2>/dev/null || true
 done
+for ip in $GAME_CLIENTS; do
+  iptables -D FORWARD -i "$WIFI" -o "$GAME_IF" -s "$ip" -j ACCEPT 2>/dev/null || true
+  iptables -D FORWARD -i "$GAME_IF" -o "$WIFI" -d "$ip" -j ACCEPT 2>/dev/null || true
+done
 iptables -D FORWARD -i "$WIFI" -j DROP 2>/dev/null || true
-# Re-insert at top in reverse order -> final: [return] [client->panel] [drop rest]
+
+# Re-insert at the top in reverse order so final order is:
+#   [1] return traffic to clients  [2] client->panel  [3] game clients <-> wg-game
+#   [4] drop everything else
 iptables -I FORWARD 1 -i "$WIFI" -j DROP
+for ip in $GAME_CLIENTS; do
+  # Inbound from wg-game is allowed even when unsolicited (peer-to-peer / Teredo);
+  # only the node can send into wg-game.
+  iptables -I FORWARD 1 -i "$GAME_IF" -o "$WIFI" -d "$ip" -j ACCEPT
+  iptables -I FORWARD 1 -i "$WIFI" -o "$GAME_IF" -s "$ip" -j ACCEPT
+done
 for sub in $DOCKER_SUBNETS; do
   iptables -I FORWARD 1 -i "$WIFI" -p tcp -d "$sub" --dport "$PANEL_PORT" -j ACCEPT
 done
 iptables -I FORWARD 1 -o "$WIFI" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
+# ---- Game tunnel MSS clamp (wg-game MTU 1380) ----
+iptables -t mangle -C FORWARD -o "$GAME_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
+  || iptables -t mangle -A FORWARD -o "$GAME_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+iptables -t mangle -C FORWARD -i "$GAME_IF" -p tcp --tcp-flags SYN,RST SYN -m tcpmss --mss 1341:65535 -j TCPMSS --set-mss 1340 2>/dev/null \
+  || iptables -t mangle -A FORWARD -i "$GAME_IF" -p tcp --tcp-flags SYN,RST SYN -m tcpmss --mss 1341:65535 -j TCPMSS --set-mss 1340
+
+# ---- INPUT: only allow redsocks port from the hotspot itself ----
 iptables -C INPUT -p tcp --dport "$RP" ! -i "$WIFI" -j DROP 2>/dev/null \
   || iptables -A INPUT -p tcp --dport "$RP" ! -i "$WIFI" -j DROP
+
+# ---- IPv6: block forwarding from wlan0 (we only tunnel IPv4) ----
 ip6tables -C FORWARD -i "$WIFI" -j DROP 2>/dev/null \
   || ip6tables -I FORWARD 1 -i "$WIFI" -j DROP
 
@@ -406,9 +449,53 @@ Logs: `journalctl -u hostapd -u dnsmasq -u redsocks -u dns-over-socks -f`
 - **TCP-only tunneling.** Only TCP (and DNS-over-TCP-via-socks) is proxied. Other UDP —
   including **QUIC (UDP/443)** — is dropped, forcing browsers/apps to fall back to TCP/TLS.
   This prevents leaks but can affect UDP-only apps (some VoIP, game traffic).
+  Exception: game clients (section 9) get full UDP through the WireGuard game tunnel.
 - **No IPv6 egress** for clients (IPv6 forwarding off, no RA) — avoids an untunneled v6 leak path.
 - **Fail-closed.** If the proxy stops, clients lose internet rather than falling back to direct.
 - **Respects Xray routing.** All client TCP enters Xray's socks inbound, so Xray's own
   routing/rules/outbound selection apply unchanged.
 - **Persistence** is via enabled systemd units + the idempotent firewall service (not
   `netfilter-persistent`), so Docker's volatile iptables chains aren't snapshotted.
+
+---
+
+## 9. Game tunnel (Xbox → WireGuard → Iran-Mullvad node)
+
+Games need UDP (Teredo, lobbies, peer traffic), which neither redsocks nor the
+Xray servers carry. So the Xbox bypasses Xray completely: all of its traffic
+(TCP, UDP, ICMP) is policy-routed into a WireGuard tunnel, `wg-game`, to the
+Iran-Mullvad node (a domestic hop), which sends it out through
+its Mullvad DE WireGuard namespace with NAT. Every other client is unchanged.
+
+```
+Xbox 10.42.0.124 ─wlan0─► Pi: rule from 10.42.0.124 → table 252 → wg-game
+   ══ WireGuard udp/51821 ══► node wg-game ─► netns mv-de (NAT) ─► wg-de ─► Mullvad DE
+```
+
+| Piece | Where | What |
+|---|---|---|
+| Tunnel | `/etc/systemd/network/30-wg-game.netdev` | `wg-game`, MTU 1380, peer `<node-ip>:51821`, `AllowedIPs=0.0.0.0/0`, keepalive 25, `RouteTable=off` (no routes from AllowedIPs) |
+| Key | `/etc/systemd/network/wg-game.key` | private key, `root:systemd-network` 640 |
+| Routing | `/etc/systemd/network/30-wg-game.network` | `10.250.1.2/24`; table 252 = default via `wg-game`; rule `from 10.42.0.124 lookup 252` (prio 1000), `from 10.42.0.124 to 10.42.0.0/24 lookup main` (prio 999) |
+| Static lease | `/etc/dnsmasq.d/xrouter-static.conf` | `dhcp-host=<xbox-mac>,10.42.0.124,XBOX` |
+| Firewall | `xrouter-firewall.sh` (`GAME_CLIENTS`) | Xbox TCP skips redsocks; FORWARD allows only Xbox ↔ `wg-game`; MSS clamp 1340. DNS still goes to dnsmasq. |
+
+Node side (`wg-quick@wg-game`, `game-gw`, `game-gw-check.timer`) is documented in
+the Notion "VPN Infrastructure" pages (01 · Flow E, Iran-Mullvad node page).
+
+- **No NAT on the Pi:** the node's peer allows `10.42.0.124/32` and routes it back
+  itself, so the Xbox sees one NAT less. Expect NAT type *Moderate* (Mullvad has no
+  port forwarding).
+- **Fail-closed:** if `wg-game` is down, table 252 has no route, the Xbox falls through
+  to `main` and the `-i wlan0 -j DROP` rule blocks it. It never leaks direct, and it
+  does not fall back to redsocks.
+- **Add another game client:** give it a static lease, add its IP to `GAME_CLIENTS`
+  and to a `[RoutingPolicyRule]` pair in `30-wg-game.network`, add it to the node
+  peer's `AllowedIPs` and to `ROUTED` in `game-gw`.
+
+```bash
+networkctl status wg-game                  # link state
+ip rule; ip route show table 252           # policy routing
+ping -c3 10.250.1.1                        # node end of the tunnel
+ip route get 1.1.1.1 from 10.42.0.124 iif wlan0   # should say: dev wg-game table 252
+```
