@@ -31,7 +31,9 @@ func (m *Manager) GenerateConfig(p *models.Proxy) ([]byte, error) {
 				"listen":   "0.0.0.0",
 				"protocol": "socks",
 				"settings": M{"auth": "noauth", "udp": true},
-				"sniffing": M{"enabled": true, "destOverride": []interface{}{"http", "tls"}},
+				// routeOnly: the sniffed domain is used for routing only; the
+				// connection keeps its original IP so IP/geoip rules still match.
+				"sniffing": M{"enabled": true, "destOverride": []interface{}{"http", "tls"}, "routeOnly": true},
 			},
 			M{
 				"tag":      "http",
@@ -45,8 +47,11 @@ func (m *Manager) GenerateConfig(p *models.Proxy) ([]byte, error) {
 			M{"tag": "direct", "protocol": "freedom"},
 			M{"tag": "block", "protocol": "blackhole"},
 		},
+		// AsIs: never resolve domains just to match routing rules. IPIfNonMatch
+		// did a DNS lookup per new domain, and when the resolvers time out through
+		// the tunnel that added ~9s to every connection.
 		"routing": M{
-			"domainStrategy": "IPIfNonMatch",
+			"domainStrategy": "AsIs",
 			"rules": rules,
 		},
 	}
