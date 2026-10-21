@@ -499,3 +499,70 @@ ip rule; ip route show table 252           # policy routing
 ping -c3 10.250.1.1                        # node end of the tunnel
 ip route get 1.1.1.1 from 10.42.0.124 iif wlan0   # should say: dev wg-game table 252
 ```
+
+### Download mode: `xbox-mode`
+
+Big downloads (game installs/updates) can be faster through Xray than through the
+tunnel: redsocks → Xray splits each TCP connection into shorter hops, while in the
+tunnel one TCP connection spans the whole ~130 ms path over UDP. `xbox-mode` switches
+only the Xbox's **TCP** between the two paths; its UDP (games, Teredo) always stays in
+`wg-game`. With the Germany (Mullvad) proxy active in the panel, both paths exit from
+the same IP.
+
+| Mode | Xbox TCP | Xbox UDP | How it is set |
+|---|---|---|---|
+| `game` (default) | `wg-game` | `wg-game` | `xrouter-firewall.sh` adds `-s 10.42.0.124 -j RETURN` at the top of `XROUTER` |
+| `download` | redsocks → Xray (v2ray) | `wg-game` | that `RETURN` rule is removed, so the Xbox's TCP hits the `REDIRECT` like every other client |
+
+```bash
+sudo xbox-mode download   # before a big download, then pause/resume it once
+sudo xbox-mode game       # back to the tunnel for everything
+sudo xbox-mode status     # show the current mode
+```
+
+- Connections that are already open keep their path; pause and resume a running
+  download after switching.
+- `download` is not persistent: a reboot or `systemctl restart xrouter-firewall`
+  brings back `game` mode.
+- The rule is removed by line number, not by spec: `iptables -D XROUTER -s 10.42.0.124
+  -j RETURN` failed to match the rule that the firewall script inserted.
+
+`/usr/local/sbin/xbox-mode` (install with `sudo install -m 755 xbox-mode /usr/local/sbin/`):
+```bash
+#!/bin/bash
+# xbox-mode: choose how the Xbox's TCP leaves the XRouter hotspot.
+#   game     - all Xbox traffic via the WireGuard game tunnel (default; also after reboot)
+#   download - Xbox TCP via redsocks -> Xray (v2ray); UDP still via the game tunnel
+#   status   - show the current mode
+# Run as root: sudo xbox-mode game|download|status
+set -uo pipefail
+XBOX=10.42.0.124
+
+# Line numbers of the "skip redsocks" RETURN rule(s) for the Xbox, highest first.
+return_lines() {
+  iptables -t nat -L XROUTER -n --line-numbers \
+    | awk -v ip="$XBOX" '$2 == "RETURN" && ($5 == ip || $5 == ip "/32") {print $1}' | sort -rn
+}
+
+case "${1:-status}" in
+  download)
+    for n in $(return_lines); do iptables -t nat -D XROUTER "$n"; done
+    ;;
+  game)
+    systemctl restart xrouter-firewall
+    ;;
+  status) ;;
+  *)
+    echo "usage: xbox-mode game|download|status" >&2
+    exit 2
+    ;;
+esac
+
+if [ -n "$(return_lines)" ]; then
+  echo "mode: game     (all Xbox traffic via wg-game)"
+else
+  echo "mode: download (Xbox TCP via v2ray, UDP via wg-game)"
+fi
+echo "XROUTER chain (first rules):"
+iptables -t nat -S XROUTER | head -4 | sed 's/^/  /'
+```
