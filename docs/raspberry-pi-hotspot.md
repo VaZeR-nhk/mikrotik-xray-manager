@@ -3,7 +3,7 @@
 Turn a Raspberry Pi (running the `xray-manager` container) into a WiFi access point
 that transparently routes **all client traffic through the Xray socks5 proxy**.
 
-- **SSID:** `XRouter`  •  **Password:** `xrouter20251`
+- **SSID:** `XRouter`  •  **Password:** `<your-wifi-password>` (8–63 characters; set in `hostapd.conf`)
 - **Uplink:** `eth0` (DHCP, untouched)  •  **AP:** `wlan0` = `10.42.0.1/24`
 - **Proxy target:** socks5 `127.0.0.1:10808` (exposed by the `xray-manager` Docker container)
 
@@ -89,7 +89,7 @@ ignore_broadcast_ssid=0
 wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
-wpa_passphrase=xrouter20251
+wpa_passphrase=<your-wifi-password>
 ```
 `/etc/default/hostapd`:
 ```ini
