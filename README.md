@@ -200,7 +200,9 @@ Useful `install`/`update` flags: `--system-update` (also `apt upgrade` the Pi),
 3. **Test** — tap a proxy to expand it and hit **Test**, or use **Test all**.
 4. **Activate** — expand a proxy and tap **Set active**. This writes the xray
    config; if xray is already running it restarts to apply.
-5. **Start** — go to **Status** and tap **Start Xray** (binary required).
+5. **Start** — go to **Status** and tap **Start Xray** (binary required). After
+   that, xray starts automatically with the active proxy whenever the app (or
+   its container) starts, e.g. after a reboot.
 6. Point your client / router at the **SOCKS5** port (`127.0.0.1:10808` locally,
    or `<host-ip>:10808` over the LAN).
 

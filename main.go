@@ -52,6 +52,21 @@ func main() {
 		log.Printf("WARNING: xray binary not found at %q — process controls will be disabled until it exists.", cfg.XrayBinary)
 	}
 
+	// Auto-start xray with the active proxy so clients (e.g. the hotspot) get
+	// their connection back after a reboot or container restart. The config is
+	// regenerated first so it always matches the current code and settings.
+	if active := store.Active().ProxyID; active != "" && xrayMgr.BinaryAvailable() {
+		if p, err := store.Proxy(active); err != nil {
+			log.Printf("autostart: active proxy %s not found: %v", active, err)
+		} else if err := xrayMgr.WriteConfig(&p); err != nil {
+			log.Printf("autostart: write config: %v", err)
+		} else if err := xrayMgr.Start(); err != nil {
+			log.Printf("autostart: start xray: %v", err)
+		} else {
+			log.Printf("autostart: xray started with active proxy %q", p.Name)
+		}
+	}
+
 	staticFS, err := fs.Sub(staticFiles, "web/static")
 	if err != nil {
 		log.Fatalf("embed: %v", err)
