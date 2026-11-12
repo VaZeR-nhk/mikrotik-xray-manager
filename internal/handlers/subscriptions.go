@@ -115,7 +115,10 @@ func (a *App) refreshOne(id string) (refreshResult, error) {
 	if err != nil {
 		return refreshResult{}, err
 	}
-	proxies, fetchErr := subscription.FetchAndParse(sub.URL)
+	proxies, fetchErr := subscription.FetchAndParse(sub.URL,subscription.RequestIdentity{
+ UserAgent:a.identity.UserAgent, HWID:a.identity.HWID, DeviceOS:a.identity.OS,
+ OSVersion:a.identity.OSVersion, DeviceModel:a.identity.Model,
+})
 	if fetchErr != nil {
 		// Record the failure but keep existing proxies.
 		_ = a.store.UpdateSubscription(id, func(s *models.Subscription) {
