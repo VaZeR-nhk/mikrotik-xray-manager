@@ -15,23 +15,29 @@ import (
 
 var client = &http.Client{Timeout: 15 * time.Second}
 
-// FetchAndParse downloads url and parses every line into a proxy. Lines that
-// fail to parse are skipped (partial failures don't fail the whole fetch).
-func FetchAndParse(url string) ([]models.Proxy, error) {
+type RequestIdentity struct { UserAgent, HWID, DeviceOS, OSVersion, DeviceModel string }
+
+// FetchAndParse downloads and parses a subscription. Empty responses are errors
+// so a failed refresh cannot replace a working proxy list with an empty list.
+func FetchAndParse(url string, identity RequestIdentity) ([]models.Proxy, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "v2rayN/6.0")
+	if identity.UserAgent!="" { req.Header.Set("User-Agent",identity.UserAgent) }
+ if identity.HWID!="" { req.Header.Set("x-hwid",identity.HWID) }
+ if identity.DeviceOS!="" { req.Header.Set("x-device-os",identity.DeviceOS) }
+ if identity.OSVersion!="" { req.Header.Set("x-ver-os",identity.OSVersion) }
+ if identity.DeviceModel!="" { req.Header.Set("x-device-model",identity.DeviceModel) }
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
+	if resp.StatusCode != http.StatusOK { return nil,fmt.Errorf("subscription request failed: HTTP %d",resp.StatusCode) }
+ if strings.EqualFold(resp.Header.Get("x-hwid-not-supported"),"true"){return nil,fmt.Errorf("Remnawave requires HWID but rejected the supplied identifier; check its format and panel settings")}
+ if strings.EqualFold(resp.Header.Get("x-hwid-max-devices-reached"),"true")||strings.EqualFold(resp.Header.Get("x-hwid-limit"),"true"){return nil,fmt.Errorf("Remnawave device limit reached; remove an old device in the panel or increase the user's device limit")}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB cap
 	if err != nil {
@@ -58,7 +64,8 @@ func FetchAndParse(url string) ([]models.Proxy, error) {
 		}
 		proxies = append(proxies, p)
 	}
-	return proxies, nil
+	if len(proxies)==0 { return nil,fmt.Errorf("subscription response contained no supported proxy links; configure a compatible Remnawave response format such as XRAY_BASE64") }
+	return proxies,nil
 }
 
 // tryBase64 returns the decoded text if s decodes cleanly and looks like links.
