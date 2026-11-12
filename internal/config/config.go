@@ -20,6 +20,11 @@ type Config struct {
 	InboundSocks     int    // XRAY_INBOUND_PORT
 	InboundHTTP      int    // XRAY_INBOUND_HTTP_PORT
 	HealthTestURL    string // HEALTH_TEST_URL — probed through the proxy for real delay
+	DeviceHWID string
+	DeviceUserAgent string
+	DeviceOS string
+	DeviceOSVersion string
+	DeviceModel string
 	SessionSecret    []byte // SESSION_SECRET
 	sessionEphemeral bool
 }
@@ -34,7 +39,12 @@ func Load() *Config {
 		XrayConfigPath: os.Getenv("XRAY_CONFIG_PATH"),
 		InboundSocks:   envInt("XRAY_INBOUND_PORT", 10808),
 		InboundHTTP:    envInt("XRAY_INBOUND_HTTP_PORT", 10809),
-		HealthTestURL:  envStr("HEALTH_TEST_URL", "http://www.gstatic.com/generate_204"),
+		HealthTestURL: envStr("HEALTH_TEST_URL", "http://www.gstatic.com/generate_204"),
+		DeviceHWID: os.Getenv("XRAY_MANAGER_HWID"),
+		DeviceUserAgent: envStr("SUBSCRIPTION_USER_AGENT", "Xray-Manager/1.0"),
+		DeviceOS: envStr("SUBSCRIPTION_DEVICE_OS", "Linux"),
+		DeviceOSVersion: os.Getenv("SUBSCRIPTION_DEVICE_OS_VERSION"),
+		DeviceModel: envStr("SUBSCRIPTION_DEVICE_MODEL", "Debian Xray Gateway"),
 	}
 
 	if c.XrayConfigPath == "" {
