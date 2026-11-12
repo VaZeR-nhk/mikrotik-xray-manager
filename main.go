@@ -16,10 +16,13 @@ import (
 
 	"xray-manager/internal/auth"
 	"xray-manager/internal/config"
+	"xray-manager/internal/device"
 	"xray-manager/internal/handlers"
 	"xray-manager/internal/storage"
 	"xray-manager/internal/xray"
 )
+
+func maskHWID(h string)string{if len(h)<=8{return "********"};return h[:4]+"…"+h[len(h)-4:]}
 
 //go:embed all:web/static
 var staticFiles embed.FS
@@ -35,7 +38,10 @@ func main() {
 		log.Fatalf("storage: %v", err)
 	}
 
-	authMgr := auth.New(cfg.Password, cfg.SessionSecret)
+	identity,err:=device.Load(cfg.DataDir,cfg.DeviceHWID,cfg.DeviceUserAgent,cfg.DeviceOS,cfg.DeviceOSVersion,cfg.DeviceModel)
+ if err!=nil { log.Fatalf("device identity: %v",err) }
+ log.Printf("subscription device identity initialized (HWID: %s)",maskHWID(identity.HWID))
+ authMgr := auth.New(cfg.Password, cfg.SessionSecret)
 	xrayMgr := xray.NewManager(cfg.XrayBinary, cfg.XrayConfigPath, cfg.InboundSocks, cfg.InboundHTTP)
 
 	// Restore persisted DNS settings so generated configs match the UI.
@@ -72,7 +78,7 @@ func main() {
 		log.Fatalf("embed: %v", err)
 	}
 
-	app := handlers.New(cfg, store, authMgr, xrayMgr, staticFS)
+	app := handlers.New(cfg, store, authMgr, xrayMgr, identity, staticFS)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
