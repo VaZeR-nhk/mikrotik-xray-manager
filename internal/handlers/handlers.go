@@ -10,6 +10,7 @@ import (
 
 	"xray-manager/internal/auth"
 	"xray-manager/internal/config"
+	"xray-manager/internal/device"
 	"xray-manager/internal/health"
 	"xray-manager/internal/storage"
 	"xray-manager/internal/xray"
@@ -22,6 +23,7 @@ type App struct {
 	auth   *auth.Manager
 	xray   *xray.Manager
 	prober *health.Prober
+	identity device.Identity
 	static fs.FS
 
 	// testMu serializes test-all runs (one at a time → 409 otherwise).
@@ -30,13 +32,13 @@ type App struct {
 }
 
 // New builds the App and its dependencies.
-func New(cfg *config.Config, store *storage.Store, am *auth.Manager, xm *xray.Manager, static fs.FS) *App {
+func New(cfg *config.Config, store *storage.Store, am *auth.Manager, xm *xray.Manager, identity device.Identity, static fs.FS) *App {
 	prober := &health.Prober{
 		Binary:  cfg.XrayBinary,
 		Config:  xray.BuildTestConfig,
 		TestURL: cfg.HealthTestURL,
 	}
-	return &App{cfg: cfg, store: store, auth: am, xray: xm, prober: prober, static: static}
+	return &App{cfg: cfg, store: store, auth: am, xray: xm, prober: prober, identity: identity, static: static}
 }
 
 // Handler returns the root http.Handler (API + static SPA).
