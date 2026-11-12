@@ -41,7 +41,7 @@ func Load() *Config {
 		InboundHTTP:    envInt("XRAY_INBOUND_HTTP_PORT", 10809),
 		HealthTestURL: envStr("HEALTH_TEST_URL", "http://www.gstatic.com/generate_204"),
 		DeviceHWID: os.Getenv("XRAY_MANAGER_HWID"),
-		DeviceUserAgent: envStr("SUBSCRIPTION_USER_AGENT", "Xray-Manager/1.0"),
+		DeviceUserAgent: envStr("SUBSCRIPTION_USER_AGENT", "Happ"),
 		DeviceOS: envStr("SUBSCRIPTION_DEVICE_OS", "Linux"),
 		DeviceOSVersion: os.Getenv("SUBSCRIPTION_DEVICE_OS_VERSION"),
 		DeviceModel: envStr("SUBSCRIPTION_DEVICE_MODEL", "Debian Xray Gateway"),
