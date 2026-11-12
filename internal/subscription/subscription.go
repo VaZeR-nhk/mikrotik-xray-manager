@@ -37,7 +37,7 @@ func FetchAndParse(url string, identity RequestIdentity) ([]models.Proxy, error)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK { return nil,fmt.Errorf("subscription request failed: HTTP %d",resp.StatusCode) }
  if strings.EqualFold(resp.Header.Get("x-hwid-not-supported"),"true"){return nil,fmt.Errorf("Remnawave requires HWID but rejected the supplied identifier; check its format and panel settings")}
- if strings.EqualFold(resp.Header.Get("x-hwid-max-devices-reached"),"true")||strings.EqualFold(resp.Header.Get("x-hwid-limit"),"true"){return nil,fmt.Errorf("Remnawave device limit reached; remove an old device in the panel or increase the user's device limit")}
+ if strings.EqualFold(resp.Header.Get("x-hwid-max-devices-reached"),"true"){return nil,fmt.Errorf("Remnawave device limit reached; remove an old device in the panel or increase the user's device limit")}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8 MiB cap
 	if err != nil {
