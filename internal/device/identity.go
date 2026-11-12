@@ -17,7 +17,7 @@ type Identity struct { HWID, UserAgent, OS, OSVersion, Model string }
 
 func Load(dataDir, configuredHWID, userAgent, osName, osVersion, model string)(Identity,error){
  id:=Identity{UserAgent:strings.TrimSpace(userAgent),OS:strings.TrimSpace(osName),OSVersion:strings.TrimSpace(osVersion),Model:strings.TrimSpace(model)}
- if id.UserAgent=="" { id.UserAgent="Xray-Manager/1.0" }; if id.OS=="" { id.OS="Linux" }; if id.Model=="" { id.Model="Debian Xray Gateway" }; if id.OSVersion=="" { id.OSVersion=detectOSVersion() }
+ if id.UserAgent=="" { id.UserAgent="Happ" }; if id.OS=="" { id.OS="Linux" }; if id.Model=="" { id.Model="Debian Xray Gateway" }; if id.OSVersion=="" { id.OSVersion=detectOSVersion() }
  if configuredHWID!="" { if !validHWID.MatchString(configuredHWID){return Identity{},fmt.Errorf("XRAY_MANAGER_HWID must be 10-64 characters: letters, digits, '-' or '='")}; id.HWID=configuredHWID; return id,nil }
  path:=filepath.Join(dataDir,"device.json")
  if b,e:=os.ReadFile(path); e==nil { var saved struct{HWID string `json:"hwid"`}; if e=json.Unmarshal(b,&saved);e!=nil{return Identity{},e}; if !validHWID.MatchString(saved.HWID){return Identity{},fmt.Errorf("stored HWID in %s is invalid",path)}; id.HWID=saved.HWID; return id,nil } else if !os.IsNotExist(e){return Identity{},e}
